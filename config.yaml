@@ -1,0 +1,6 @@
+devices:
+  - ip: "192.168.1.139:5555"
+    name: "HP_Pertama"
+  # Tambahkan HP lainnya nanti:
+  # - ip: "192.168.1.140:5555"
+  #   name: "HP_Kedua"
