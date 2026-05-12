@@ -4,8 +4,13 @@ import time
 import yaml
 import logging
 import os
-from human_behavior import *
-from instagram_actions import *
+from instagram_actions import (
+    check_notifications,
+    check_dm,
+    watch_stories,
+    interact_feed,
+    scroll_reels,
+)
 
 # Setup logging
 os.makedirs("logs", exist_ok=True)
@@ -14,27 +19,30 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("logs/session.log"),
-        logging.StreamHandler()
-    ]
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
-def load_config(config_file="config.yaml"):
+
+def load_config(config_file: str = "config.yaml") -> dict:
     try:
         with open(config_file, "r") as f:
             return yaml.safe_load(f)
-    except Exception as e:
-        logger.error(f"Gagal baca config: {e}")
+    except Exception:
+        logger.exception("Gagal baca config")
         return {"devices": []}
 
-def pilih_mode():
+
+def pilih_mode() -> str:
     print("\n=== BOT INSTAGRAM ===")
     print("1. Testing Module")
     print("2. Loop Task")
     pilihan = input("Pilih mode (1/2): ").strip()
     return pilihan
 
-def pilih_task():
+
+def pilih_task() -> list[int]:
     print("\nPilih task (pisahkan dengan koma):")
     print("1. Notifikasi & DM")
     print("2. Story")
@@ -43,7 +51,7 @@ def pilih_task():
     print("5. Semua")
     tasks = input("Masukkan angka: ").strip()
     if '5' in tasks:
-        return [1,2,3,4]
+        return [1, 2, 3, 4]
     selected = []
     for t in tasks.split(','):
         t = t.strip()
@@ -51,39 +59,44 @@ def pilih_task():
             selected.append(int(t))
     return selected
 
-def jalankan_session(d, mode, tasks, durasi_total_menit=10, like_prob=0.3, comment_prob=0.03, repost_prob=0.05, promosi_ratio=0.2):
-    """Menjalankan sesi sesuai mode."""
-    if mode == "1":  # Testing
-        print("=== MODE TESTING ===")
+
+def jalankan_session(d, mode: str, tasks: list[int],
+                     durasi_total_menit: int = 10,
+                     like_prob: float = 0.3,
+                     comment_prob: float = 0.03,
+                     repost_prob: float = 0.05,
+                     promosi_ratio: float = 0.2):
+    if mode == "1":
+        logger.info("=== MODE TESTING ===")
         d.app_start("com.instagram.android")
-        random_sleep(5,8)
+        time.sleep(random.uniform(5, 8))
         if 1 in tasks:
             check_notifications(d)
             check_dm(d)
         if 2 in tasks:
             watch_stories(d)
         if 3 in tasks:
-            interact_feed(d, duration=60, like_prob=1, comment_prob=1, repost_prob=1, comment_promosi_ratio=promosi_ratio)
+            interact_feed(d, duration=60, like_prob=1.0, comment_prob=1.0,
+                         repost_prob=1.0, comment_promosi_ratio=promosi_ratio)
         if 4 in tasks:
-            scroll_reels(d, duration=60, like_prob=1, comment_prob=1, repost_prob=1, comment_promosi_ratio=promosi_ratio)
+            scroll_reels(d, duration=60, like_prob=1.0, comment_prob=1.0,
+                        repost_prob=1.0, comment_promosi_ratio=promosi_ratio)
         d.app_stop("com.instagram.android")
-        print("Testing selesai.")
+        logger.info("Testing selesai.")
         return
 
     # Loop Task
-    print(f"=== LOOP TASK SELAMA {durasi_total_menit} MENIT ===")
-    # Hitung durasi per cycle (default per task)
+    logger.info(f"=== LOOP TASK SELAMA {durasi_total_menit} MENIT ===")
     durasi_task = {
-        1: 120,   # notif+DM: 2 menit
-        2: 180,   # story: 3 menit
-        3: 300,   # feed: 5 menit
-        4: 300    # reels: 5 menit
+        1: 120,   # notif+DM
+        3: 300,   # feed
+        4: 300,   # reels
     }
-    # Durasi satu siklus detik
-    cycle_duration = sum(durasi_task[t] for t in tasks)
+    # Hitung durasi siklus hanya untuk task yang punya durasi (bukan story)
+    cycle_duration = sum(durasi_task[t] for t in tasks if t in durasi_task)
     if cycle_duration == 0:
-        logger.error("Tidak ada task yang dipilih.")
-        return
+        # Semua task tidak punya durasi (misal hanya story), pakai fallback 10 menit
+        cycle_duration = 600
 
     total_durasi_detik = durasi_total_menit * 60
     start_total = time.time()
@@ -93,7 +106,7 @@ def jalankan_session(d, mode, tasks, durasi_total_menit=10, like_prob=0.3, comme
         iteration += 1
         logger.info(f"Siklus ke-{iteration}")
         d.app_start("com.instagram.android")
-        random_sleep(5,8)
+        time.sleep(random.uniform(5, 8))
 
         if 1 in tasks:
             check_notifications(d)
@@ -104,19 +117,26 @@ def jalankan_session(d, mode, tasks, durasi_total_menit=10, like_prob=0.3, comme
             time.sleep(1)
         if 3 in tasks:
             dur = durasi_task[3]
-            interact_feed(d, duration=dur, like_prob=like_prob, comment_prob=comment_prob, repost_prob=repost_prob, comment_promosi_ratio=promosi_ratio)
+            interact_feed(d, duration=dur, like_prob=like_prob,
+                         comment_prob=comment_prob,
+                         repost_prob=repost_prob,
+                         comment_promosi_ratio=promosi_ratio)
         if 4 in tasks:
             dur = durasi_task[4]
-            scroll_reels(d, duration=dur, like_prob=like_prob, comment_prob=comment_prob, repost_prob=repost_prob, comment_promosi_ratio=promosi_ratio)
+            scroll_reels(d, duration=dur, like_prob=like_prob,
+                        comment_prob=comment_prob,
+                        repost_prob=repost_prob,
+                        comment_promosi_ratio=promosi_ratio)
 
         d.app_stop("com.instagram.android")
-        random_sleep(3,6)
+        time.sleep(random.uniform(3, 6))
         if time.time() - start_total >= total_durasi_detik:
             break
 
     logger.info("Durasi total tercapai, loop selesai.")
 
-def main():
+
+def main() -> None:
     config = load_config()
     devices = config.get("devices", [])
     if not devices:
@@ -137,10 +157,9 @@ def main():
         prom = float(input("Rasio komentar promosi (0-1, default 0.2): ") or 0.2)
     else:
         menit = 0
-        like = comment = repost = 0
+        like = comment = repost = 0.0
         prom = 0.2
 
-    # Jalankan untuk setiap perangkat (berurutan agar tidak tabrakan)
     for dev in devices:
         ip = dev["ip"]
         nama = dev.get("name", ip)
@@ -154,10 +173,11 @@ def main():
                 jalankan_session(d, mode, tasks)
             else:
                 jalankan_session(d, mode, tasks, menit, like, comment, repost, prom)
-        except Exception as e:
-            logger.error(f"Error di {nama}: {e}")
+        except Exception:
+            logger.exception(f"Error di {nama}")
         finally:
-            time.sleep(random.uniform(10,30))
+            time.sleep(random.uniform(10, 30))
+
 
 if __name__ == "__main__":
     main()
