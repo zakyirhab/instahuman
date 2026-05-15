@@ -6,7 +6,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ---------- pencarian otomatis adb.exe ----------
 def _find_adb_path() -> str:
+    """Cari adb.exe di PATH atau di lokasi umum."""
     adb = shutil.which("adb")
     if adb and os.path.isfile(adb):
         return adb
@@ -18,7 +20,10 @@ def _find_adb_path() -> str:
     for path in common:
         if os.path.isfile(path):
             return path
-    raise FileNotFoundError("adb.exe tidak ditemukan. Pastikan C:\\adb\\adb.exe ada atau tambahkan ke PATH.")
+    raise FileNotFoundError(
+        "adb.exe tidak ditemukan. Pastikan folder ADB ada di PATH atau di lokasi: "
+        + ", ".join(common)
+    )
 
 def _run_adb_raw(args: list[str]) -> subprocess.CompletedProcess:
     """Jalankan perintah ADB, kembalikan CompletedProcess tanpa raise error."""
@@ -26,7 +31,9 @@ def _run_adb_raw(args: list[str]) -> subprocess.CompletedProcess:
     full_cmd = [adb_path] + args
     return subprocess.run(full_cmd, capture_output=True, text=True)
 
+# ---------- fungsi publik ----------
 def check_adb_connection(ip_port: str) -> bool:
+    """Cek apakah ADB terkoneksi ke perangkat tertentu."""
     try:
         result = _run_adb_raw(["devices"])
         lines = result.stdout.strip().split('\n')[1:]
@@ -49,6 +56,7 @@ def connect_device(ip_port: str) -> bool:
         return False
 
 def wait_for_device(ip_port: str, timeout: int = 30) -> bool:
+    """Tunggu hingga perangkat terkoneksi."""
     start = time.time()
     while time.time() - start < timeout:
         if check_adb_connection(ip_port):
@@ -57,6 +65,7 @@ def wait_for_device(ip_port: str, timeout: int = 30) -> bool:
     return False
 
 def restart_adb_server() -> None:
+    """Restart ADB server."""
     try:
         _run_adb_raw(["kill-server"])
     except:
