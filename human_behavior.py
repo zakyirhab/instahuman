@@ -38,10 +38,10 @@ def human_swipe(d, direction='up', distance=None, speed='fast'):
     d.swipe(start_x, start_y, start_x, end_y, duration)
 
 def human_typing(d, text):
-    """Mengetik huruf per huruf dengan jeda acak."""
+    """Mengetik huruf per huruf dengan jeda yang cukup cepat (natural untuk pengetik mahir)."""
     for char in text:
         d.send_keys(char)
-        time.sleep(random.uniform(0.05, 0.25))
+        time.sleep(random.uniform(0.02, 0.08))   # <-- lebih cepat
 
 # Daftar RESOURCE_ID Instagram yang sudah diverifikasi
 IG_PACKAGE = "com.instagram.android"
