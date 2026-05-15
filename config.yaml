@@ -1,6 +1,3 @@
 devices:
   - ip: "ssss"
     name: "HP_Pertama"
-  # Tambahkan HP lainnya nanti:
-  # - ip: "sssss"
-  #   name: "HP_Kedua"
