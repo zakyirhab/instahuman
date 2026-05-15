@@ -51,10 +51,10 @@ COMMENTS_NATURAL = [
 ]
 
 COMMENTS_PROMOSI = [
-    "Eh ada acara seru loh di IG ini, coba cek deh! @seeu_tissue",
-    "Ngomongin soal ini, aku nemu yang lebih keren lho @seeu_tissue",
-    "Sst.. jangan bilang siapapun, tapi aku punya rekomendasi buat kamu @seeu_tissue",
-    "Btw, kalian tau nggak sih akun @seeu_tissue? Keren banget!",
+    "Eh ada acara seru loh di IG ini, coba cek deh! ",
+    "Ngomongin soal ini, aku nemu yang lebih keren lho ",
+    "Sst.. jangan bilang siapapun, tapi aku punya rekomendasi buat kamu ",
+    "Btw, kalian tau nggak sih akun ? Keren banget!",
     "Jangan lupa mampir ya, ada info penting nih di bio aku",
     "Buat yang penasaran, cek aja langsung!",
     "Ada yang baru nih, buruan cek sebelum kehabisan!",
