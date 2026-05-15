@@ -27,11 +27,15 @@ def human_swipe(d, direction='up', distance=None, speed='fast'):
             distance = random.randint(h//5, h//3)
     
     if direction == 'up':
-        start_y = random.randint(h//2, 3*h//4)  # mulai dari agak bawah
+        start_y = random.randint(h//2, 3*h//4)
         end_y = start_y - distance
+        if end_y < 1:
+            end_y = 1
     else:
         start_y = random.randint(h//4, h//2)
         end_y = start_y + distance
+        if end_y > h - 1:
+            end_y = h - 1
 
     min_dur, max_dur = SWIPE_SPEED.get(speed, (0.3, 0.9))
     duration = random.uniform(min_dur, max_dur)
