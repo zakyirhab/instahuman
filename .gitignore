@@ -1,0 +1,20 @@
+# Screenshots & logs
+screenshots/
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment & IDE
+.env
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config asli (jangan sampai bocor)
+config.yaml
