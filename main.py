@@ -193,11 +193,13 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
     start_total = time.time()
     iteration = 0
 
+    # BUKA APLIKASI SEKALI DI AWAL
+    d.app_start("com.instagram.android")
+    time.sleep(random.uniform(5, 8))
+
     while time.time() - start_total < total_durasi_detik:
         iteration += 1
         logger.info(f"Siklus ke-{iteration}")
-        d.app_start("com.instagram.android")
-        time.sleep(random.uniform(5, 8))
 
         if 1 in tasks:
             check_notifications(d)
@@ -221,12 +223,15 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
                         comment_promosi_ratio=promosi_ratio,
                         max_likes=max_likes)
 
-        d.app_stop("com.instagram.android")
-        time.sleep(random.uniform(3, 6))
+        # Jeda antar siklus (aplikasi tetap terbuka)
+        time.sleep(random.uniform(2, 4))
+
         if time.time() - start_total >= total_durasi_detik:
             break
 
-    logger.info("Durasi total tercapai, loop selesai.")
+    # TUTUP APLIKASI DI AKHIR
+    d.app_stop("com.instagram.android")
+    logger.info("Durasi total tercapai, loop selesai.")    
 
 def run_single_device(device_info, mode, tasks, menit, like, comment, repost, prom, max_likes):
     """Thread worker untuk satu perangkat."""
