@@ -338,6 +338,8 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
 
             # IKLAN
             ad_reel = d(text=RESOURCE_IDS["REEL_AD_LABEL_TEXT"])
+            if not ad_reel.exists:
+                ad_reel = d.xpath(RESOURCE_IDS["REEL_AD_XPATH"])
             if ad_reel.exists:
                 logger.info("Iklan Reel, skip...")
                 human_swipe(d, 'up', speed='fast', distance=random.randint(800, 1100))
