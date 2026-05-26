@@ -71,7 +71,7 @@ RESOURCE_IDS = {
     "REEL_COMMENT": "com.instagram.android:id/comment_button",
     "REEL_REPOST_DESC": "Repost",
     "REEL_AD_LABEL_TEXT": "Ad",
-
+    "REEL_AD_XPATH": '//*[@resource-id="com.instagram.android:id/clips_media_info_component"]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]',
     # Notifikasi
     "NOTIFICATION_BUTTON": "com.instagram.android:id/notification",
     "NOTIFICATION_FOLLOW_BACK": None,
