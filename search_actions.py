@@ -12,6 +12,7 @@ import re
 import yaml
 import logging
 import os
+import datetime
 
 from human_behavior import random_sleep, human_swipe, human_typing, RESOURCE_IDS
 from instagram_actions import (
@@ -102,6 +103,46 @@ def navigate_to_search(d, max_retry: int = 3) -> bool:
     logger.warning("Gagal masuk halaman Search setelah semua percobaan.")
     return False
 
+def _find_comment_button_reel(d):
+    """
+    Cari tombol komentar reel dengan 3 fallback:
+    1. resourceId comment_button (standar)
+    2. clips_linear_layout_container > FrameLayout[2] (ketika ketutupan action bar "Your Algorithm")
+    3. Swipe kecil ke atas lalu coba ulang
+    Return: elemen jika ditemukan, None jika gagal
+    """
+    # Percobaan 1: tombol standar
+    btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
+    if btn.exists:
+        return btn
+
+    # Percobaan 2: ketutupan action bar — pakai container alternative
+    btn_alt = d.xpath(
+        '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
+        '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
+    )
+    if btn_alt.exists:
+        logger.info("Tombol komentar ditemukan via clips_linear_layout_container.")
+        return btn_alt
+
+    # Percobaan 3: swipe kecil supaya action bar geser, coba lagi
+    for _ in range(2):
+        human_swipe(d, 'up', distance=random.randint(80, 150), speed='fast')
+        random_sleep(0.4, 0.7)
+
+        btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
+        if btn.exists:
+            return btn
+
+        btn_alt = d.xpath(
+            '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
+            '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
+        )
+        if btn_alt.exists:
+            logger.info("Tombol komentar ditemukan setelah swipe via container.")
+            return btn_alt
+
+    return None
 
 def _open_search_input(d) -> bool:
     """Klik search bar sehingga input field muncul. Return True jika berhasil."""
@@ -219,22 +260,28 @@ def _interact_content(d, is_reel: bool,
             random_sleep(0.3, 0.7)
 
         # Buka komentar & baca sebentar sebelum komen
+                # Komentar reel
         if random.random() < comment_prob:
-            # Cari tombol komentar
-            comment_btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
-            if not comment_btn.exists:
-                # Cari via xpath fallback
-                cb = d.xpath(FIRST_COMMENT_XPATH)
-                if cb.exists:
-                    cb.click()
-                    random_sleep(1.0, 2.0)
-                    # Scroll komentar sebentar
-                    for _ in range(random.randint(1, 3)):
-                        human_swipe(d, 'up', distance=random.randint(200, 400))
-                        random_sleep(0.5, 1.5)
-            if comment_btn.exists or d(resourceId=RESOURCE_IDS["REEL_COMMENT"]).exists:
+            comment_btn = _find_comment_button_reel(d)
+            if comment_btn:
+                # 🔴 Screenshot 1: bukti postingan SEBELUM buka komentar
+                os.makedirs("screenshots", exist_ok=True)
+                ts1 = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                file1 = f"screenshots/{ts1}_search_reel_post.png"
+                d.screenshot(file1)
+                logger.info(f"Bukti postingan reel: {file1}")
+
+                comment_btn.click()
+                random_sleep(1.0, 2.0)
+                for _ in range(random.randint(1, 3)):
+                    human_swipe(d, 'up', distance=random.randint(200, 400))
+                    random_sleep(0.5, 1.2)
+
+                # post_comment akan mengambil screenshot KEDUA (sebelum kirim)
                 post_comment(d, is_reel=True,
                              comment_promosi_ratio=comment_promosi_ratio)
+            else:
+                logger.info("Tombol komentar tidak ditemukan, lewati.")
 
         # Repost
         if random.random() < repost_prob:
@@ -243,33 +290,6 @@ def _interact_content(d, is_reel: bool,
                 rp.click()
                 random_sleep(0.5, 1.0)
                 logger.info("Repost reel (search).")
-
-    else:
-        # Feed post
-        random_sleep(1.5, 3.0)
-
-        # Like
-        if random.random() < like_prob and (max_likes == 0 or like_count[0] < max_likes):
-            like_btn = d(resourceId=RESOURCE_IDS["FEED_LIKE"])
-            if like_btn.exists:
-                like_btn.click()
-                like_count[0] += 1
-                logger.info("Like post (search).")
-                random_sleep(0.3, 0.7)
-
-        # Comment
-        if random.random() < comment_prob:
-            post_comment(d, is_reel=False,
-                         comment_promosi_ratio=comment_promosi_ratio)
-            back_to_feed(d)
-
-        # Repost
-        if random.random() < repost_prob:
-            rp = d.xpath('//*[@resource-id="com.instagram.android:id/reposts_ufi_icon"]')
-            if rp.exists:
-                rp.click()
-                random_sleep(0.5, 1.0)
-                logger.info("Repost post (search).")
 
 
 def _pick_and_open_tile(d, prefer_reel: bool = True,
@@ -292,6 +312,14 @@ def _pick_and_open_tile(d, prefer_reel: bool = True,
             desc = (info.get("contentDescription") or "").lower()
             if not desc:
                 continue
+            try:
+                sponsored = elem.child(resourceId="com.instagram.android:id/label_top_sponsored")
+                if sponsored.exists:
+                    logger.info("Tile iklan terdeteksi, lewati.")
+                    continue
+            except Exception:
+                pass
+
             is_reel = "reel" in desc
             play_count = _get_tile_play_count(d, elem) if is_reel else 0
             tiles.append({
