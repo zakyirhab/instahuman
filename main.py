@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import concurrent.futures
+import subprocess
 from human_behavior import random_sleep
 from instagram_actions import (
     check_notifications,
@@ -300,9 +301,7 @@ def _run_search_task(d, search_cfg: dict, duration: int,
     keyword = search_cfg.get("keyword")
 
     if sub == "3":
-        # Mine mode: jalankan 1x, tidak perlu durasi
         mine_keywords(d)
-        # Setelah mine, lanjut explore sisa waktu (opsional)
         explore_and_interact(d, duration=max(60, duration // 2),
                              like_prob=like_prob, comment_prob=comment_prob,
                              repost_prob=repost_prob,
@@ -315,7 +314,6 @@ def _run_search_task(d, search_cfg: dict, duration: int,
                              comment_promosi_ratio=promosi_ratio,
                              max_likes=max_likes)
     else:
-        # sub == "1" — search by keyword (acak dari bank jika keyword=None)
         search_and_interact(d, duration=duration,
                             like_prob=like_prob, comment_prob=comment_prob,
                             repost_prob=repost_prob,
@@ -357,12 +355,36 @@ def run_single_device(device_info, mode, tasks, menit, like, comment,
                 logger_local.error("Gagal koneksi setelah restart, lewati.")
                 return
 
-    try:
-        d = u2.connect(ip)
-        if not d.info:
-            logger_local.error("Gagal koneksi UIAutomator2.")
-            return
+    # ---- PERBAIKAN: retry + install ulang ATX agent ----
+    d = None
+    for retry in range(3):
+        try:
+            d = u2.connect(ip)
+            if d.info:
+                break
+        except Exception as conn_err:
+            logger_local.warning(f"Percobaan {retry+1} gagal: {conn_err}")
+            time.sleep(3)
 
+    if d is None or not d.info:
+        logger_local.warning("Mencoba install ulang ATX agent...")
+        try:
+            subprocess.run(
+                ["python", "-m", "uiautomator2", "init", "-s", ip],
+                capture_output=True,
+                timeout=30
+            )
+            time.sleep(5)
+            d = u2.connect(ip)
+        except Exception:
+            pass
+
+    if d is None or not d.info:
+        logger_local.error("Gagal koneksi UIAutomator2 setelah retry & init ulang.")
+        return
+    # ----------------------------------------------------
+
+    try:
         import instagram_actions as ia
         import search_actions as sa
         original_ia = ia.logger
@@ -454,4 +476,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main()  
