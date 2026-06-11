@@ -93,118 +93,6 @@ def dismiss_popups(d):
     return False
 
 
-# ---------- page detection & safe navigation ----------
-
-def get_current_page(d) -> str:
-    """
-    Deteksi halaman Instagram yang sedang aktif.
-    Return: 'feed' | 'reels' | 'story' | 'dm' | 'notification' | 'unknown'
-    """
-    # Feed: tab home selected adalah sinyal paling cepat dan andal
-    if d(resourceId=RESOURCE_IDS["TAB_HOME"], selected=True).exists:
-        return 'feed'
-    # Feed: fallback via elemen konten feed
-    if d(resourceId=RESOURCE_IDS["FEED_LIKE"]).exists:
-        return 'feed'
-    if d(resourceId=RESOURCE_IDS["FEED_COMMENT"]).exists:
-        return 'feed'
-    # Reels: tab clips selected
-    if d(resourceId=RESOURCE_IDS["TAB_REELS"], selected=True).exists:
-        return 'reels'
-    # Story: viewer root
-    if d(resourceId="com.instagram.android:id/reel_viewer_root").exists:
-        return 'story'
-    # DM
-    if d(resourceId="com.instagram.android:id/direct_inbox_item_layout").exists:
-        return 'dm'
-    # Notification
-    if d(resourceId="com.instagram.android:id/notification_list").exists:
-        return 'notification'
-    return 'unknown'
-
-
-def navigate_to_feed(d, max_retry: int = 3) -> bool:
-    """
-    Navigasi ke tab Feed dan verifikasi berhasil.
-    Return True jika berhasil, False jika gagal setelah max_retry.
-    """
-    for attempt in range(max_retry):
-        if get_current_page(d) == 'feed':
-            logger.info("Sudah di Feed.")
-            return True
-
-        logger.info(f"Navigasi ke Feed (percobaan {attempt + 1})...")
-
-        # Jika sedang di dalam halaman lain (story/reels/post), tekan back dulu
-        current = get_current_page(d)
-        if current in ('story', 'reels', 'unknown'):
-            d.press("back")
-            random_sleep(0.5, 0.8)
-
-        home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
-        if home_tab.exists:
-            home_tab.click()
-        else:
-            # Tab tidak terlihat — back lagi lalu coba
-            d.press("back")
-            random_sleep(0.5, 1.0)
-            home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
-            if home_tab.exists:
-                home_tab.click()
-
-        random_sleep(1.5, 2.5)
-        dismiss_popups(d)
-
-        if get_current_page(d) == 'feed':
-            logger.info("Berhasil navigasi ke Feed.")
-            return True
-
-    logger.warning("Gagal navigasi ke Feed setelah semua percobaan.")
-    return False
-
-
-def navigate_to_reels(d, max_retry: int = 3) -> bool:
-    """
-    Navigasi ke tab Reels dan verifikasi berhasil.
-    Return True jika berhasil, False jika gagal setelah max_retry.
-    """
-    for attempt in range(max_retry):
-        current = get_current_page(d)
-        if current == 'reels':
-            logger.info("Sudah di Reels.")
-            return True
-
-        logger.info(f"Navigasi ke Reels (percobaan {attempt + 1})...")
-
-        # Tutup halaman yang terbuka dulu agar navigation bar muncul
-        if current in ('story', 'unknown'):
-            d.press("back")
-            random_sleep(0.5, 0.8)
-
-        reels_tab = d(resourceId=RESOURCE_IDS["TAB_REELS"])
-        if reels_tab.exists:
-            reels_tab.click()
-        else:
-            # Fallback: ke home dulu supaya navbar muncul, lalu ke reels
-            home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
-            if home_tab.exists:
-                home_tab.click()
-                random_sleep(1.0, 1.5)
-            reels_tab = d(resourceId=RESOURCE_IDS["TAB_REELS"])
-            if reels_tab.exists:
-                reels_tab.click()
-
-        random_sleep(2.0, 3.0)
-        dismiss_popups(d)
-
-        if get_current_page(d) == 'reels':
-            logger.info("Berhasil navigasi ke Reels.")
-            return True
-
-    logger.warning("Gagal navigasi ke Reels setelah semua percobaan.")
-    return False
-
-
 # ---------- navigasi ----------
 
 def go_home(d):
@@ -230,6 +118,81 @@ def back_to_feed(d):
             return
         d.press("back")
         time.sleep(0.5)
+
+
+# ---------- get_post_username & get_post_caption (untuk boost) ----------
+
+def get_post_username(d) -> str:
+    """
+    Baca username dari postingan yang sedang di layar feed.
+    Mencoba beberapa resource ID fallback.
+    Return string username (tanpa @) atau "" jika tidak ditemukan.
+    """
+    # Prioritas 1: header row username di feed
+    candidates = [
+        "com.instagram.android:id/row_header_textview",
+        "com.instagram.android:id/username",
+        "com.instagram.android:id/media_owner_username_text_view",
+    ]
+    for res_id in candidates:
+        el = d(resourceId=res_id)
+        if el.exists:
+            try:
+                txt = el.get_text(timeout=1).strip().lstrip("@")
+                if txt:
+                    return txt
+            except Exception:
+                pass
+
+    # Fallback: cari elemen pertama yang berisi teks mirip username (hanya huruf/angka/titik/underscore)
+    pattern = re.compile(r'^[a-zA-Z0-9._]{3,30}$')
+    try:
+        for elem in d.xpath('//*[@resource-id]').all():
+            try:
+                txt = (elem.text or "").strip().lstrip("@")
+                if txt and pattern.match(txt):
+                    # Hindari angka murni dan teks generik
+                    if not txt.isdigit() and txt.lower() not in (
+                        "follow", "following", "message", "share", "like",
+                        "comment", "save", "more", "sponsored"
+                    ):
+                        return txt
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_post_caption(d) -> str:
+    """
+    Baca caption postingan yang sedang di layar.
+    Return string caption atau "" jika tidak ditemukan.
+    """
+    candidates = [
+        "com.instagram.android:id/caption_text_view",
+        "com.instagram.android:id/row_feed_comment_textview_layout",
+    ]
+    for res_id in candidates:
+        el = d(resourceId=res_id)
+        if el.exists:
+            try:
+                txt = el.get_text(timeout=1).strip()
+                if txt:
+                    return txt
+            except Exception:
+                pass
+
+    # Fallback xpath
+    try:
+        el = d.xpath('//*[@resource-id="com.instagram.android:id/caption_text_view"]')
+        if el.exists:
+            return (el.get_text() or "").strip()
+    except Exception:
+        pass
+
+    return ""
 
 
 # ---------- notifikasi & DM ----------
@@ -279,12 +242,14 @@ def check_dm(d) -> None:
 
 def watch_stories(d) -> None:
     logger.info("Menonton story...")
-    # Story ring hanya terlihat dari Feed — pastikan sudah di sana
+
+    # Story ring hanya terlihat dari Feed
     if get_current_page(d) != 'feed':
         logger.info("Belum di Feed, navigasi dulu sebelum cari story...")
         if not navigate_to_feed(d):
             logger.error("Tidak bisa masuk Feed, skip watch_stories.")
             return
+
     try:
         all_rings = d(resourceId=RESOURCE_IDS["STORY_RING"])
         if not all_rings.exists:
@@ -337,7 +302,6 @@ def watch_stories(d) -> None:
 
 
 def _next_story(d):
-    """Lanjut ke story berikutnya dengan swipe kiri (aman dari widget)."""
     if RESOURCE_IDS.get("STORY_NEXT"):
         next_btn = d(resourceId=RESOURCE_IDS["STORY_NEXT"])
         if next_btn.exists:
@@ -347,13 +311,102 @@ def _next_story(d):
 
 
 def _skip_ad_story(d):
-    """Swipe kiri untuk skip story iklan."""
     w, h = d.window_size()
     start_x = int(w * 0.9)
     end_x = int(w * 0.1)
     y = h // 2
     d.swipe(start_x, y, end_x, y, duration=random.uniform(0.3, 0.6))
     random_sleep(0.5, 1)
+
+
+# ---------- page detection & safe navigation ----------
+
+def get_current_page(d) -> str:
+    if d(resourceId=RESOURCE_IDS["TAB_HOME"], selected=True).exists:
+        return 'feed'
+    if d(resourceId=RESOURCE_IDS["FEED_LIKE"]).exists:
+        return 'feed'
+    if d(resourceId=RESOURCE_IDS["FEED_COMMENT"]).exists:
+        return 'feed'
+    if d(resourceId=RESOURCE_IDS["TAB_REELS"], selected=True).exists:
+        return 'reels'
+    if d(resourceId="com.instagram.android:id/reel_viewer_root").exists:
+        return 'story'
+    if d(resourceId="com.instagram.android:id/direct_inbox_item_layout").exists:
+        return 'dm'
+    if d(resourceId="com.instagram.android:id/notification_list").exists:
+        return 'notification'
+    return 'unknown'
+
+
+def navigate_to_feed(d, max_retry: int = 3) -> bool:
+    for attempt in range(max_retry):
+        if get_current_page(d) == 'feed':
+            logger.info("Sudah di Feed.")
+            return True
+
+        logger.info(f"Navigasi ke Feed (percobaan {attempt + 1})...")
+
+        current = get_current_page(d)
+        if current in ('story', 'reels', 'unknown'):
+            d.press("back")
+            random_sleep(0.5, 0.8)
+
+        home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
+        if home_tab.exists:
+            home_tab.click()
+        else:
+            d.press("back")
+            random_sleep(0.5, 1.0)
+            home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
+            if home_tab.exists:
+                home_tab.click()
+
+        random_sleep(1.5, 2.5)
+        dismiss_popups(d)
+
+        if get_current_page(d) == 'feed':
+            logger.info("Berhasil navigasi ke Feed.")
+            return True
+
+    logger.warning("Gagal navigasi ke Feed setelah semua percobaan.")
+    return False
+
+
+def navigate_to_reels(d, max_retry: int = 3) -> bool:
+    for attempt in range(max_retry):
+        current = get_current_page(d)
+        if current == 'reels':
+            logger.info("Sudah di Reels.")
+            return True
+
+        logger.info(f"Navigasi ke Reels (percobaan {attempt + 1})...")
+
+        if current in ('story', 'unknown'):
+            d.press("back")
+            random_sleep(0.5, 0.8)
+
+        reels_tab = d(resourceId=RESOURCE_IDS["TAB_REELS"])
+        if reels_tab.exists:
+            reels_tab.click()
+        else:
+            home_tab = d(resourceId=RESOURCE_IDS["TAB_HOME"])
+            if home_tab.exists:
+                home_tab.click()
+                random_sleep(1.0, 1.5)
+            reels_tab = d(resourceId=RESOURCE_IDS["TAB_REELS"])
+            if reels_tab.exists:
+                reels_tab.click()
+
+        random_sleep(2.0, 3.0)
+        dismiss_popups(d)
+
+        if get_current_page(d) == 'reels':
+            logger.info("Berhasil navigasi ke Reels.")
+            return True
+
+    logger.warning("Gagal navigasi ke Reels setelah semua percobaan.")
+    return False
 
 
 # ---------- feed ----------
@@ -437,7 +490,6 @@ def interact_feed(d, duration=60, like_prob=0.3, comment_prob=0.03, repost_prob=
 # ---------- reels ----------
 
 def _reel_like_fallback(d):
-    """Double-tap di tengah layar untuk like reel (fallback)."""
     w, h = d.window_size()
     cx, cy = w // 2, h // 2
     d.click(cx, cy)
@@ -455,7 +507,6 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
         logger.error("Tidak bisa masuk Reels, skip task ini.")
         return
 
-    # Lewati 3 video pertama sambil tutup pop-up
     for _ in range(3):
         time.sleep(random.uniform(1.0, 2.5))
         dismiss_popups(d)
@@ -469,7 +520,6 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
         try:
             dismiss_popups(d)
 
-            # Deteksi iklan
             ad_reel = d(text=RESOURCE_IDS["REEL_AD_LABEL_TEXT"])
             if not ad_reel.exists:
                 ad_reel = d.xpath(RESOURCE_IDS["REEL_AD_XPATH"])
@@ -479,7 +529,6 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
                 random_sleep(0.3, 0.7)
                 continue
 
-            # Status follow
             follow_btn = d(resourceId="com.instagram.android:id/inline_follow_button")
             if not follow_btn.exists:
                 follow_btn = d(text="Follow")
@@ -506,12 +555,12 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
                         repost_btn.click()
                         random_sleep(0.5, 1)
                         logger.info("Repost reel.")
-                    else:
-                        logger.info("Tombol repost tidak terlihat, lewati.")
 
                 if random.random() < comment_prob:
-                    comment_btn = _find_reel_action_button(d, RESOURCE_IDS["REEL_COMMENT"], "Comment")
+                    comment_btn = _find_comment_button_reel(d)
                     if comment_btn:
+                        comment_btn.click()
+                        random_sleep(1.0, 2.0)
                         post_comment(d, is_reel=True, comment_promosi_ratio=comment_promosi_ratio)
                     else:
                         logger.info("Tombol komentar tidak muncul, lewati.")
@@ -530,8 +579,43 @@ def scroll_reels(d, duration: int = 60, like_prob: float = 0.3,
                 pass
 
 
+def _find_comment_button_reel(d):
+    """
+    Cari tombol komentar reel dengan 3 fallback:
+    1. resourceId comment_button
+    2. clips_linear_layout_container > FrameLayout[2] (ketika ketutupan action bar)
+    3. Swipe kecil lalu coba ulang
+    """
+    btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
+    if btn.exists:
+        return btn
+
+    btn_alt = d.xpath(
+        '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
+        '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
+    )
+    if btn_alt.exists:
+        logger.info("Tombol komentar ditemukan via clips_linear_layout_container.")
+        return btn_alt
+
+    for _ in range(2):
+        human_swipe(d, 'up', distance=random.randint(80, 150), speed='fast')
+        random_sleep(0.4, 0.7)
+        btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
+        if btn.exists:
+            return btn
+        btn_alt = d.xpath(
+            '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
+            '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
+        )
+        if btn_alt.exists:
+            logger.info("Tombol komentar ditemukan setelah swipe via container.")
+            return btn_alt
+
+    return None
+
+
 def _find_reel_action_button(d, target_id_or_desc, log_label: str):
-    """Cari tombol dengan resourceId atau description, dengan fallback swipe kecil."""
     if target_id_or_desc != "Comment":
         btn = d(resourceId=target_id_or_desc)
         if btn.exists:
@@ -557,15 +641,23 @@ def _find_reel_action_button(d, target_id_or_desc, log_label: str):
 
 # ---------- komentar ----------
 
-def post_comment(d, is_reel: bool = False, comment_promosi_ratio: float = 0.2):
+def post_comment(d, is_reel: bool = False, comment_promosi_ratio: float = 0.2,
+                 forced_comment: str = None):
+    """
+    Tulis dan kirim komentar.
+    forced_comment: kalau diisi, pakai teks ini langsung (untuk boost mode).
+    """
     try:
         comment_btn = None
         for attempt in range(3):
             if not is_reel:
                 comment_btn = d(resourceId=RESOURCE_IDS["FEED_COMMENT"])
             else:
-                comment_btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
-            if comment_btn.exists:
+                comment_btn = _find_comment_button_reel(d)
+                if comment_btn:
+                    break
+                comment_btn = None
+            if comment_btn and comment_btn.exists:
                 break
             logger.info("Tombol komentar belum terlihat, scroll kecil...")
             human_swipe(d, 'up', distance=random.randint(180, 250), speed='fast')
@@ -598,7 +690,10 @@ def post_comment(d, is_reel: bool = False, comment_promosi_ratio: float = 0.2):
             d.press("back")
             return
 
-        if random.random() < comment_promosi_ratio:
+        # Pilih komentar
+        if forced_comment:
+            comment = forced_comment
+        elif random.random() < comment_promosi_ratio:
             comment = random.choice(COMMENTS_PROMOSI)
         else:
             comment = random.choice(COMMENTS_NATURAL)
