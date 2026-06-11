@@ -104,45 +104,94 @@ def navigate_to_search(d, max_retry: int = 3) -> bool:
     return False
 
 def _find_comment_button_reel(d):
-    """
-    Cari tombol komentar reel dengan 3 fallback:
-    1. resourceId comment_button (standar)
-    2. clips_linear_layout_container > FrameLayout[2] (ketika ketutupan action bar "Your Algorithm")
-    3. Swipe kecil ke atas lalu coba ulang
-    Return: elemen jika ditemukan, None jika gagal
-    """
-    # Percobaan 1: tombol standar
-    btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
-    if btn.exists:
-        return btn
-
-    # Percobaan 2: ketutupan action bar — pakai container alternative
-    btn_alt = d.xpath(
+    """Cari tombol komentar reel HANYA lewat XPath container. 
+    Kalau tidak ketemu, swipe kecil 2x. Kalau tetap tidak ada → None."""
+    xpath_container = (
         '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
         '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
     )
-    if btn_alt.exists:
-        logger.info("Tombol komentar ditemukan via clips_linear_layout_container.")
-        return btn_alt
+    # Percobaan 1: langsung
+    btn = d.xpath(xpath_container)
+    if btn.exists:
+        logger.info("Tombol komentar ditemukan (XPath container).")
+        return btn
 
-    # Percobaan 3: swipe kecil supaya action bar geser, coba lagi
+    # Swipe kecil 2x sambil cari ulang
     for _ in range(2):
         human_swipe(d, 'up', distance=random.randint(80, 150), speed='fast')
         random_sleep(0.4, 0.7)
-
-        btn = d(resourceId=RESOURCE_IDS["REEL_COMMENT"])
+        btn = d.xpath(xpath_container)
         if btn.exists:
+            logger.info("Tombol komentar ditemukan setelah swipe (XPath container).")
             return btn
 
-        btn_alt = d.xpath(
-            '//*[@resource-id="com.instagram.android:id/clips_linear_layout_container"]'
-            '/android.widget.FrameLayout[2]/android.widget.LinearLayout[1]'
-        )
-        if btn_alt.exists:
-            logger.info("Tombol komentar ditemukan setelah swipe via container.")
-            return btn_alt
-
     return None
+
+def _do_comment(d, comment_promosi_ratio: float, is_reel: bool):
+    """
+    Mengetik komentar, screenshot, kirim, dan tutup sheet komentar.
+    Diasumsikan halaman komentar SUDAH TERBUKA.
+    """
+    from comment_bank import COMMENTS_NATURAL, COMMENTS_PROMOSI
+
+    # Tunggu kolom input muncul
+    field = None
+    for _ in range(10):
+        field = d(resourceId=RESOURCE_IDS["COMMENT_FIELD"])
+        if field.exists:
+            break
+        time.sleep(0.5)
+    if field is None or not field.exists:
+        logger.warning("Kolom komentar tidak muncul di search.")
+        d.press("back")
+        return
+
+    # Pilih komentar
+    if random.random() < comment_promosi_ratio:
+        comment = random.choice(COMMENTS_PROMOSI)
+    else:
+        comment = random.choice(COMMENTS_NATURAL)
+
+    # Ketik
+    field.click()
+    random_sleep(0.5)
+    human_typing(d, comment)
+    random_sleep(0.5, 1.5)
+
+    # Screenshot sebelum kirim
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = comment[:30]
+    for c in r'<>:"/\|?* ':
+        safe = safe.replace(c, "_")
+    file2 = f"screenshots/{ts}_search_reel_presend_{safe}.png"
+    d.screenshot(file2)
+    logger.info(f"Bukti sebelum kirim (search): {file2}")
+
+    # Kirim
+    send_btn = d(resourceId=RESOURCE_IDS["COMMENT_POST_ICON"])
+    if send_btn.exists:
+        send_btn.click()
+        logger.info(f"Komentar terkirim: {comment}")
+    else:
+        d.press("enter")
+        logger.info(f"Komentar terkirim (Enter): {comment}")
+
+    # Tutup sheet komentar (drag handle)
+    handle = d(resourceId="com.instagram.android:id/bottom_sheet_drag_handle_prism")
+    if handle.exists:
+        bounds = handle.info['bounds']
+        start_x = (bounds['left'] + bounds['right']) // 2
+        start_y = (bounds['top'] + bounds['bottom']) // 2
+        end_y = d.window_size()[1] - 10
+        d.swipe(start_x, start_y, start_x, end_y, duration=0.4)
+        logger.info("Sheet komentar ditutup (search).")
+        random_sleep(1, 2)
+    else:
+        # Fallback back
+        d.press("back")
+        random_sleep(0.5, 1.0)
+        d.press("back")
+        random_sleep(0.5, 1.0)
 
 def _open_search_input(d) -> bool:
     """Klik search bar sehingga input field muncul. Return True jika berhasil."""
@@ -277,9 +326,8 @@ def _interact_content(d, is_reel: bool,
                     human_swipe(d, 'up', distance=random.randint(200, 400))
                     random_sleep(0.5, 1.2)
 
-                # post_comment akan mengambil screenshot KEDUA (sebelum kirim)
-                post_comment(d, is_reel=True,
-                             comment_promosi_ratio=comment_promosi_ratio)
+                                # Tulis & kirim komentar langsung (tanpa cari tombol komentar lagi)
+                _do_comment(d, comment_promosi_ratio, is_reel=True)
             else:
                 logger.info("Tombol komentar tidak ditemukan, lewati.")
 
