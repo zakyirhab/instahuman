@@ -4,24 +4,15 @@ import time
 import yaml
 import logging
 import os
-import re
 import concurrent.futures
-import subprocess
-from human_behavior import random_sleep
 from instagram_actions import (
     check_notifications,
     check_dm,
-    dismiss_popups,
-    go_home,
     watch_stories,
     interact_feed,
     scroll_reels,
-)
-from search_actions import (
-    search_and_interact,
-    explore_and_interact,
-    mine_keywords,
-    load_keywords,
+    dismiss_popups,
+    go_home,
 )
 from utils.adb_helper import (
     check_adb_connection,
@@ -55,43 +46,17 @@ def pilih_task() -> list[int]:
     print("2. Story")
     print("3. Feed")
     print("4. Reels")
-    print("5. Search & Interact")
-    print("6. Semua (1-5)")
+    print("5. Boost Comment by Username")
+    print("6. Semua (1-4)")
     tasks = input("Masukkan angka: ").strip()
     if '6' in tasks:
-        return [1, 2, 3, 4, 5]
+        return [1, 2, 3, 4]
     selected = []
     for t in tasks.split(','):
         t = t.strip()
         if t and t in '12345':
             selected.append(int(t))
     return selected
-
-
-def pilih_search_mode() -> dict:
-    """
-    Tanya user sub-mode untuk task Search.
-    Return dict konfigurasi search.
-    """
-    print("\n  === KONFIGURASI SEARCH ===")
-    print("  Sub-mode:")
-    print("  1. Search by keyword (dari bank keyword)")
-    print("  2. Explore tanpa keyword")
-    print("  3. Mine keyword baru (scan + review)")
-    sub = input("  Pilih sub-mode (1/2/3, default 1): ").strip() or "1"
-
-    keyword = None
-    if sub == "1":
-        bank = load_keywords()
-        if bank:
-            print(f"  Keyword tersedia: {', '.join(bank)}")
-            kw_input = input("  Ketik keyword spesifik (kosongkan = acak dari bank): ").strip()
-            keyword = kw_input if kw_input else None
-        else:
-            print("  Bank keyword kosong, akan pakai explore.")
-            sub = "2"
-
-    return {"sub_mode": sub, "keyword": keyword}
 
 
 def pilih_params_loop() -> tuple:
@@ -170,12 +135,8 @@ def pilih_custom_groups(devices):
             assigned.difference_update(fresh)
             continue
 
-        search_cfg = {}
-        if 5 in tasks:
-            search_cfg = pilih_search_mode()
-
         menit, like, comment, repost, prom, max_likes = 0, 0.0, 0.0, 0.0, 0.2, 0
-        if mode == "2":
+        if mode == "2" and any(t in tasks for t in [1, 2, 3, 4]):
             menit, like, comment, repost, prom, max_likes = pilih_params_loop()
 
         group = {
@@ -188,7 +149,6 @@ def pilih_custom_groups(devices):
             'repost_prob': repost,
             'promosi_ratio': prom,
             'max_likes': max_likes,
-            'search_cfg': search_cfg,
         }
         groups.append(group)
         print(f"Grup berhasil ditambahkan ({len(fresh)} perangkat).")
@@ -202,7 +162,7 @@ def _app_start_and_reset(d, logger):
     time.sleep(random.uniform(5, 8))
     dismiss_popups(d)
     go_home(d)
-    random_sleep(1, 2)
+    time.sleep(random.uniform(1, 2))
     logger.info("App terbuka dan posisi direset ke Home.")
 
 
@@ -212,12 +172,10 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
                      comment_prob: float = 0.03,
                      repost_prob: float = 0.05,
                      promosi_ratio: float = 0.2,
-                     max_likes: int = 0,
-                     search_cfg: dict = None):
-    """Satu sesi untuk satu perangkat (testing/loop)."""
+                     max_likes: int = 0):
+    """Satu sesi untuk satu perangkat (testing/loop). Tidak mencakup task 5 (boost)."""
     logger = logging.getLogger(device_name)
     logger.info(f"=== Sesi {device_name} dimulai ===")
-    search_cfg = search_cfg or {}
 
     if mode == "1":
         logger.info("=== MODE TESTING ===")
@@ -234,11 +192,6 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
         if 4 in tasks:
             scroll_reels(d, duration=60, like_prob=1.0, comment_prob=1.0,
                          repost_prob=1.0, comment_promosi_ratio=promosi_ratio)
-        if 5 in tasks:
-            _run_search_task(d, search_cfg, duration=60,
-                             like_prob=1.0, comment_prob=1.0,
-                             repost_prob=1.0, promosi_ratio=promosi_ratio,
-                             max_likes=max_likes)
 
         d.app_stop("com.instagram.android")
         logger.info("Testing selesai.")
@@ -246,11 +199,7 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
 
     # ---------- MODE LOOP ----------
     logger.info(f"=== LOOP TASK SELAMA {durasi_total_menit} MENIT ===")
-    durasi_task = {1: 120, 3: 300, 4: 300, 5: 300}
-    cycle_duration = sum(durasi_task[t] for t in tasks if t in durasi_task)
-    if cycle_duration == 0:
-        cycle_duration = 600
-
+    durasi_task = {1: 120, 3: 300, 4: 300}
     total_durasi_detik = durasi_total_menit * 60
     start_total = time.time()
     iteration = 0
@@ -276,11 +225,6 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
             scroll_reels(d, duration=durasi_task[4], like_prob=like_prob,
                          comment_prob=comment_prob, repost_prob=repost_prob,
                          comment_promosi_ratio=promosi_ratio, max_likes=max_likes)
-        if 5 in tasks:
-            _run_search_task(d, search_cfg, duration=durasi_task[5],
-                             like_prob=like_prob, comment_prob=comment_prob,
-                             repost_prob=repost_prob, promosi_ratio=promosi_ratio,
-                             max_likes=max_likes)
 
         time.sleep(random.uniform(2, 4))
         if time.time() - start_total < total_durasi_detik:
@@ -290,54 +234,58 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
     logger.info("Durasi total tercapai, loop selesai.")
 
 
-def _run_search_task(d, search_cfg: dict, duration: int,
-                     like_prob: float, comment_prob: float, repost_prob: float,
-                     promosi_ratio: float, max_likes: int) -> None:
+def _connect_all_devices(devices: list) -> list:
     """
-    Dispatch ke sub-mode search yang sesuai.
-    Mine keywords hanya berjalan sekali (bukan loop), lalu lanjut explore.
+    Koneksi ADB + UIAutomator2 untuk semua device.
+    Return list of (d, name) yang berhasil terkoneksi.
     """
-    sub = search_cfg.get("sub_mode", "1")
-    keyword = search_cfg.get("keyword")
+    connected = []
+    for device_info in devices:
+        ip = device_info["ip"]
+        nama = device_info.get("name", ip)
+        logger_local = logging.getLogger(nama)
 
-    if sub == "3":
-        mine_keywords(d)
-        explore_and_interact(d, duration=max(60, duration // 2),
-                             like_prob=like_prob, comment_prob=comment_prob,
-                             repost_prob=repost_prob,
-                             comment_promosi_ratio=promosi_ratio,
-                             max_likes=max_likes)
-    elif sub == "2":
-        explore_and_interact(d, duration=duration,
-                             like_prob=like_prob, comment_prob=comment_prob,
-                             repost_prob=repost_prob,
-                             comment_promosi_ratio=promosi_ratio,
-                             max_likes=max_likes)
-    else:
-        search_and_interact(d, duration=duration,
-                            like_prob=like_prob, comment_prob=comment_prob,
-                            repost_prob=repost_prob,
-                            comment_promosi_ratio=promosi_ratio,
-                            max_likes=max_likes,
-                            keyword=keyword)
+        if not check_adb_connection(ip):
+            logger_local.warning(f"[{nama}] ADB tidak terhubung, mencoba connect...")
+            connect_device(ip)
+            time.sleep(3)
+            if not check_adb_connection(ip):
+                restart_adb_server()
+                time.sleep(2)
+                connect_device(ip)
+                time.sleep(5)
+                if not check_adb_connection(ip):
+                    logger_local.error(f"[{nama}] Gagal koneksi, lewati.")
+                    continue
+
+        try:
+            d = u2.connect(ip)
+            if not d.info:
+                logger_local.error(f"[{nama}] Gagal koneksi UIAutomator2.")
+                continue
+            connected.append((d, nama))
+            logger_local.info(f"[{nama}] Terkoneksi.")
+        except Exception:
+            logger_local.exception(f"[{nama}] Error koneksi")
+
+    return connected
 
 
-def run_single_device(device_info, mode, tasks, menit, like, comment,
-                      repost, prom, max_likes, search_cfg=None):
-    """Thread worker untuk satu perangkat."""
+def run_single_device(device_info, mode, tasks, menit, like, comment, repost, prom, max_likes):
+    """Thread worker untuk satu perangkat (task 1-4)."""
     ip = device_info["ip"]
     nama = device_info.get("name", ip)
 
     logger_local = logging.getLogger(nama)
     logger_local.setLevel(logging.INFO)
     formatter = logging.Formatter(f"%(asctime)s [%(levelname)s] [{nama}] %(message)s")
-    file_handler = logging.FileHandler(f"logs/session_{nama}.log")
-    file_handler.setFormatter(formatter)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
+    fh = logging.FileHandler(f"logs/session_{nama}.log")
+    fh.setFormatter(formatter)
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
     logger_local.handlers.clear()
-    logger_local.addHandler(file_handler)
-    logger_local.addHandler(stream_handler)
+    logger_local.addHandler(fh)
+    logger_local.addHandler(sh)
 
     logger_local.info(f"Mulai sesi untuk {nama} ({ip})")
 
@@ -346,7 +294,6 @@ def run_single_device(device_info, mode, tasks, menit, like, comment,
         connect_device(ip)
         time.sleep(3)
         if not check_adb_connection(ip):
-            logger_local.warning("Connect gagal, restart ADB & connect ulang...")
             restart_adb_server()
             time.sleep(2)
             connect_device(ip)
@@ -355,48 +302,20 @@ def run_single_device(device_info, mode, tasks, menit, like, comment,
                 logger_local.error("Gagal koneksi setelah restart, lewati.")
                 return
 
-    # ---- PERBAIKAN: retry + install ulang ATX agent ----
-    d = None
-    for retry in range(3):
-        try:
-            d = u2.connect(ip)
-            if d.info:
-                break
-        except Exception as conn_err:
-            logger_local.warning(f"Percobaan {retry+1} gagal: {conn_err}")
-            time.sleep(3)
-
-    if d is None or not d.info:
-        logger_local.warning("Mencoba install ulang ATX agent...")
-        try:
-            subprocess.run(
-                ["python", "-m", "uiautomator2", "init", "-s", ip],
-                capture_output=True,
-                timeout=30
-            )
-            time.sleep(5)
-            d = u2.connect(ip)
-        except Exception:
-            pass
-
-    if d is None or not d.info:
-        logger_local.error("Gagal koneksi UIAutomator2 setelah retry & init ulang.")
-        return
-    # ----------------------------------------------------
-
     try:
+        d = u2.connect(ip)
+        if not d.info:
+            logger_local.error("Gagal koneksi UIAutomator2.")
+            return
+
         import instagram_actions as ia
-        import search_actions as sa
-        original_ia = ia.logger
-        original_sa = sa.logger
+        original_logger = ia.logger
         ia.logger = logger_local
-        sa.logger = logger_local
         try:
-            jalankan_session(d, nama, mode, tasks, menit, like, comment,
-                             repost, prom, max_likes, search_cfg or {})
+            jalankan_session(d, nama, mode, tasks, menit, like,
+                             comment, repost, prom, max_likes)
         finally:
-            ia.logger = original_ia
-            sa.logger = original_sa
+            ia.logger = original_logger
 
     except Exception:
         logger_local.exception(f"Error di {nama}")
@@ -411,40 +330,74 @@ def main() -> None:
         logging.warning("Tidak ada perangkat di config.yaml.")
         return
 
+    # Cek apakah task 5 (boost) dipilih di level global
     print("\nGunakan pembagian grup khusus? (y/n)")
-    if input("> ").strip().lower() == 'y':
+    use_groups = input("> ").strip().lower() == 'y'
+
+    if use_groups:
         groups = pilih_custom_groups(devices)
         if not groups:
             print("Tidak ada grup dibuat, keluar.")
             return
+
+        # Cek apakah ada grup dengan task boost
+        boost_groups = [g for g in groups if 5 in g['tasks']]
+        normal_groups = [g for g in groups if 5 not in g['tasks']]
+
+        # Jalankan normal groups paralel
+        if normal_groups:
+            _run_normal_groups(normal_groups)
+
+        # Jalankan boost groups (ambil semua device-nya)
+        if boost_groups:
+            boost_devices = []
+            for g in boost_groups:
+                boost_devices.extend(g['devices'])
+            _run_boost_mode(boost_devices)
+
     else:
-        mode = pilih_mode()
         tasks = pilih_task()
         if not tasks:
             print("Tidak ada task yang dipilih.")
             return
 
-        search_cfg = {}
-        if 5 in tasks:
-            search_cfg = pilih_search_mode()
+        if tasks == [5]:
+            # Pure boost mode
+            _run_boost_mode(devices)
+            return
 
+        if 5 in tasks:
+            # Mixed: boost + task lain tidak didukung di mode global
+            # Pisahkan: jalankan task normal dulu, lalu boost
+            print("\n[INFO] Task Boost dijalankan terpisah setelah task lain selesai.")
+            normal_tasks = [t for t in tasks if t != 5]
+            if normal_tasks:
+                mode = pilih_mode()
+                menit, like, comment, repost, prom, max_likes = 0, 0.0, 0.0, 0.0, 0.2, 0
+                if mode == "2":
+                    menit, like, comment, repost, prom, max_likes = pilih_params_loop()
+                groups = [{'devices': devices, 'mode': mode, 'tasks': normal_tasks,
+                           'menit': menit, 'like_prob': like, 'comment_prob': comment,
+                           'repost_prob': repost, 'promosi_ratio': prom, 'max_likes': max_likes}]
+                _run_normal_groups(groups)
+            _run_boost_mode(devices)
+            return
+
+        # Task normal saja
+        mode = pilih_mode()
         menit, like, comment, repost, prom, max_likes = 0, 0.0, 0.0, 0.0, 0.2, 0
         if mode == "2":
             menit, like, comment, repost, prom, max_likes = pilih_params_loop()
+        groups = [{'devices': devices, 'mode': mode, 'tasks': tasks,
+                   'menit': menit, 'like_prob': like, 'comment_prob': comment,
+                   'repost_prob': repost, 'promosi_ratio': prom, 'max_likes': max_likes}]
+        _run_normal_groups(groups)
 
-        groups = [{
-            'devices': devices,
-            'mode': mode,
-            'tasks': tasks,
-            'menit': menit,
-            'like_prob': like,
-            'comment_prob': comment,
-            'repost_prob': repost,
-            'promosi_ratio': prom,
-            'max_likes': max_likes,
-            'search_cfg': search_cfg,
-        }]
+    print("\nSemua perangkat selesai.")
 
+
+def _run_normal_groups(groups: list):
+    """Jalankan semua grup task normal (1-4) secara paralel."""
     all_futures = []
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=sum(len(g['devices']) for g in groups)
@@ -462,7 +415,6 @@ def main() -> None:
                     group['repost_prob'],
                     group['promosi_ratio'],
                     group['max_likes'],
-                    group.get('search_cfg', {}),
                 )
                 all_futures.append(future)
 
@@ -472,8 +424,41 @@ def main() -> None:
             except Exception as exc:
                 logging.error(f"Thread error: {exc}")
 
-    print("\nSemua perangkat selesai.")
+
+def _run_boost_mode(devices: list):
+    """Setup logger per device lalu jalankan boost session."""
+    from boost_comment import setup_boost_session, run_boost_session
+    import instagram_actions as ia
+
+    # Setup logger per device sebelum koneksi
+    for device_info in devices:
+        nama = device_info.get("name", device_info["ip"])
+        logger_local = logging.getLogger(nama)
+        logger_local.setLevel(logging.INFO)
+        formatter = logging.Formatter(f"%(asctime)s [%(levelname)s] [{nama}] %(message)s")
+        fh = logging.FileHandler(f"logs/session_{nama}.log")
+        fh.setFormatter(formatter)
+        sh = logging.StreamHandler()
+        sh.setFormatter(formatter)
+        logger_local.handlers.clear()
+        logger_local.addHandler(fh)
+        logger_local.addHandler(sh)
+
+    # Konfigurasi boost dari user
+    cfg = setup_boost_session()
+    if not cfg:
+        return
+
+    # Koneksi semua device
+    print(f"\n[BOOST] Menghubungkan {len(devices)} perangkat...")
+    connected = _connect_all_devices(devices)
+    if not connected:
+        print("[BOOST] Tidak ada perangkat yang terkoneksi.")
+        return
+
+    # Override logger instagram_actions per device dihandle di dalam DeviceWorker
+    run_boost_session(connected, cfg)
 
 
 if __name__ == "__main__":
-    main()  
+    main()
