@@ -18,6 +18,7 @@ from utils.adb_helper import (
     check_adb_connection,
     restart_adb_server,
     connect_device,
+    get_device_ip,
 )
 
 os.makedirs("logs", exist_ok=True)
@@ -245,6 +246,18 @@ def _connect_all_devices(devices: list) -> list:
         nama = device_info.get("name", ip)
         logger_local = logging.getLogger(nama)
 
+        # ─── Auto-deteksi IP berdasarkan serial ───
+        serial = device_info.get("serial", "").strip()
+        if serial:
+            detected_ip = get_device_ip(serial)
+            if detected_ip:
+                if detected_ip != ip:
+                    logger_local.info(f"IP diperbarui: {ip} → {detected_ip} (via serial)")
+                    ip = detected_ip
+            else:
+                logger_local.warning(f"Serial {serial} tidak ditemukan di jaringan, pakai IP lama.")
+        # ───────────────────────────────────────────
+
         if not check_adb_connection(ip):
             logger_local.warning(f"[{nama}] ADB tidak terhubung, mencoba connect...")
             connect_device(ip)
@@ -289,6 +302,18 @@ def run_single_device(device_info, mode, tasks, menit, like, comment, repost, pr
 
     logger_local.info(f"Mulai sesi untuk {nama} ({ip})")
 
+    # ─── Auto-deteksi IP berdasarkan serial ───
+    serial = device_info.get("serial", "").strip()
+    if serial:
+        detected_ip = get_device_ip(serial)
+        if detected_ip:
+            if detected_ip != ip:
+                logger_local.info(f"IP diperbarui: {ip} → {detected_ip} (via serial)")
+                ip = detected_ip
+        else:
+            logger_local.warning(f"Serial {serial} tidak ditemukan di jaringan, pakai IP lama.")
+    # ───────────────────────────────────────────
+
     if not check_adb_connection(ip):
         logger_local.warning("ADB tidak terhubung, mencoba connect...")
         connect_device(ip)
@@ -321,7 +346,7 @@ def run_single_device(device_info, mode, tasks, menit, like, comment, repost, pr
         logger_local.exception(f"Error di {nama}")
     finally:
         logger_local.info("Sesi selesai.")
-
+        
 
 def main() -> None:
     config = load_config()
