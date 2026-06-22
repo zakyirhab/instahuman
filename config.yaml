@@ -1,3 +1,4 @@
 devices:
   - ip: "ssss"
     name: "HP_Pertama"
+    serial: "Isi_Serial"
