@@ -23,6 +23,10 @@ from utils.adb_helper import (
 os.makedirs("logs", exist_ok=True)
 
 
+# ─────────────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────────────
+
 def load_config(config_file: str = "config.yaml") -> dict:
     try:
         with open(config_file, "r") as f:
@@ -31,6 +35,19 @@ def load_config(config_file: str = "config.yaml") -> dict:
         logging.exception("Gagal baca config")
         return {"devices": []}
 
+
+def save_config(config: dict, config_file: str = "config.yaml"):
+    """Simpan config kembali ke file (untuk update IP otomatis)."""
+    try:
+        with open(config_file, "w") as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    except Exception:
+        logging.exception("Gagal simpan config")
+
+
+# ─────────────────────────────────────────────────────────────────
+# MENU
+# ─────────────────────────────────────────────────────────────────
 
 def pilih_mode() -> str:
     print("\n=== BOT INSTAGRAM ===")
@@ -99,7 +116,9 @@ def pilih_custom_groups(devices):
     print("\n=== PEMBAGIAN GRUP ===")
     print(f"Total perangkat tersedia: {len(devices)}")
     for idx, dev in enumerate(devices, 1):
-        print(f"  {idx}. {dev.get('name', dev['ip'])} ({dev['ip']})")
+        label = dev.get('name', dev.get('ip', '?'))
+        ip_or_serial = dev.get('ip', dev.get('serial', '?'))
+        print(f"  {idx}. {label} ({ip_or_serial})")
 
     while True:
         print("\nMasukkan pilihan HP (contoh: 1-5, 2,4, 'sisa', 'selesai'):")
@@ -155,6 +174,98 @@ def pilih_custom_groups(devices):
 
     return groups
 
+
+# ─────────────────────────────────────────────────────────────────
+# RESOLVE IP via SERIAL
+# ─────────────────────────────────────────────────────────────────
+
+def _resolve_ip(device_info: dict, logger=None) -> str:
+    """
+    Ambil IP yang valid untuk device_info.
+    Prioritas:
+      1. Serial → get_device_ip() → update device_info["ip"] kalau beda
+      2. IP yang sudah ada di device_info
+    Return IP string, atau '' kalau tidak bisa resolve.
+    """
+    ip = device_info.get("ip", "").strip()
+    serial = device_info.get("serial", "").strip()
+    nama = device_info.get("name", ip)
+
+    if serial:
+        detected = get_device_ip(serial)
+        if detected:
+            if detected != ip:
+                msg = f"[{nama}] IP diperbarui: {ip} → {detected} (via serial)"
+                if logger:
+                    logger.info(msg)
+                else:
+                    print(msg)
+                # Update device_info secara in-place agar konsisten di semua caller
+                device_info["ip"] = detected
+                ip = detected
+        else:
+            msg = f"[{nama}] Serial {serial} tidak ditemukan, pakai IP lama: {ip}"
+            if logger:
+                logger.warning(msg)
+            else:
+                print(msg)
+
+    return ip
+
+
+# ─────────────────────────────────────────────────────────────────
+# PRA-KONEKSI
+# ─────────────────────────────────────────────────────────────────
+
+def _preconnect_all(device_list: list) -> list:
+    """
+    Resolve IP + koneksi ADB + UIAutomator2 untuk semua perangkat.
+    Return list of (d, nama, ip, device_info) yang siap pakai.
+    """
+    ready = []
+    for dev in device_list:
+        nama = dev.get("name", dev.get("ip", "?"))
+
+        # 1. Resolve IP (update device_info in-place)
+        ip = _resolve_ip(dev)
+        if not ip:
+            print(f"[{nama}] Tidak ada IP valid, lewati.")
+            continue
+
+        # 2. Koneksi ADB
+        if not check_adb_connection(ip):
+            print(f"[{nama}] Menghubungi {ip}...")
+            connect_device(ip)
+            time.sleep(2)
+        if not check_adb_connection(ip):
+            print(f"[{nama}] Gagal koneksi ADB, lewati.")
+            continue
+
+        # 3. Koneksi UIAutomator2 dengan retry
+        d = None
+        for _ in range(3):
+            try:
+                d = u2.connect(ip)
+                if d.info:
+                    break
+                d = None
+            except Exception:
+                d = None
+                time.sleep(2)
+
+        if d is None:
+            print(f"[{nama}] Gagal koneksi UIAutomator2, lewati.")
+            continue
+
+        print(f"[{nama}] Siap ({ip})")
+        ready.append((d, nama, ip, dev))
+
+    return ready
+
+
+# ─────────────────────────────────────────────────────────────────
+# SESSION
+# ─────────────────────────────────────────────────────────────────
 
 def _app_start_and_reset(d, logger):
     """Buka Instagram dan pastikan posisi awal di Feed (home)."""
@@ -235,103 +346,11 @@ def jalankan_session(d, device_name, mode: str, tasks: list[int],
 
 
 # ─────────────────────────────────────────────────────────────────
-# PRA-KONEKSI (tanpa restart ADB)
+# THREAD WORKER
 # ─────────────────────────────────────────────────────────────────
-def _preconnect_all(device_list):
-    """
-    Koneksikan ADB + UIAutomator2 untuk SEMUA perangkat sebelum sesi.
-    Tidak ada restart ADB di sini.
-    Return list of (d, name, ip, device_info) yang siap pakai.
-    """
-    ready = []
-    for dev in device_list:
-        ip = dev.get("ip", "")
-        nama = dev.get("name", ip)
-        serial = dev.get("serial", "").strip()
 
-        # Auto-deteksi IP via serial
-        if serial:
-            detected = get_device_ip(serial)
-            if detected and detected != ip:
-                print(f"[{nama}] IP diperbarui: {ip} → {detected}")
-                ip = detected
-
-        # Koneksi ADB
-        if not check_adb_connection(ip):
-            print(f"[{nama}] Menghubungi {ip}...")
-            connect_device(ip)
-            time.sleep(2)
-        if not check_adb_connection(ip):
-            print(f"[{nama}] Gagal koneksi ADB, lewati.")
-            continue
-
-        # Koneksi UIAutomator2 (dengan retry)
-        d = None
-        for retry in range(3):
-            try:
-                d = u2.connect(ip)
-                if d.info:
-                    break
-            except Exception:
-                time.sleep(2)
-        if d is None or not d.info:
-            print(f"[{nama}] Gagal koneksi UIAutomator2, lewati.")
-            continue
-
-        ready.append((d, nama, ip, dev))
-    return ready
-
-
-# Versi bersih dari _connect_all_devices (tanpa restart ADB)
-def _connect_all_devices(devices: list) -> list:
-    """
-    Koneksi ADB + UIAutomator2 untuk semua device.
-    Return list of (d, name) yang berhasil terkoneksi.
-    """
-    connected = []
-    for device_info in devices:
-        ip = device_info["ip"]
-        nama = device_info.get("name", ip)
-        logger_local = logging.getLogger(nama)
-
-        # Auto-deteksi IP berdasarkan serial
-        serial = device_info.get("serial", "").strip()
-        if serial:
-            detected_ip = get_device_ip(serial)
-            if detected_ip:
-                if detected_ip != ip:
-                    logger_local.info(f"IP diperbarui: {ip} → {detected_ip} (via serial)")
-                    ip = detected_ip
-            else:
-                logger_local.warning(f"Serial {serial} tidak ditemukan di jaringan, pakai IP lama.")
-
-        if not check_adb_connection(ip):
-            logger_local.warning(f"[{nama}] ADB tidak terhubung, mencoba connect...")
-            connect_device(ip)
-            time.sleep(3)
-            if not check_adb_connection(ip):
-                # restart_adb_server DIHAPUS
-                logger_local.error(f"[{nama}] Gagal koneksi, lewati.")
-                continue
-
-        try:
-            d = u2.connect(ip)
-            if not d.info:
-                logger_local.error(f"[{nama}] Gagal koneksi UIAutomator2.")
-                continue
-            connected.append((d, nama))
-            logger_local.info(f"[{nama}] Terkoneksi.")
-        except Exception:
-            logger_local.exception(f"[{nama}] Error koneksi")
-
-    return connected
-
-
-def run_single_device(device_info, mode, tasks, menit, like, comment, repost, prom, max_likes):
-    """Thread worker untuk satu perangkat (task 1-4)."""
-    ip = device_info["ip"]
-    nama = device_info.get("name", ip)
-
+def _setup_logger(nama: str) -> logging.Logger:
+    """Buat logger per perangkat dengan file + stream handler."""
     logger_local = logging.getLogger(nama)
     logger_local.setLevel(logging.INFO)
     formatter = logging.Formatter(f"%(asctime)s [%(levelname)s] [{nama}] %(message)s")
@@ -342,27 +361,53 @@ def run_single_device(device_info, mode, tasks, menit, like, comment, repost, pr
     logger_local.handlers.clear()
     logger_local.addHandler(fh)
     logger_local.addHandler(sh)
+    return logger_local
 
-    logger_local.info(f"Mulai sesi untuk {nama} ({ip})")
 
-    # Auto-deteksi IP berdasarkan serial
-    serial = device_info.get("serial", "").strip()
-    if serial:
-        detected_ip = get_device_ip(serial)
-        if detected_ip:
-            if detected_ip != ip:
-                logger_local.info(f"IP diperbarui: {ip} → {detected_ip} (via serial)")
-                ip = detected_ip
-        else:
-            logger_local.warning(f"Serial {serial} tidak ditemukan di jaringan, pakai IP lama.")
+def run_single_device_with_d(d, device_info, mode, tasks, menit,
+                              like, comment, repost, prom, max_likes):
+    """
+    Thread worker yang menerima koneksi UIAutomator2 (d) yang sudah jadi.
+    Dipakai oleh _run_normal_groups (sudah preconnect).
+    """
+    nama = device_info.get("name", device_info.get("ip", "?"))
+    logger_local = _setup_logger(nama)
+    logger_local.info(f"Mulai sesi untuk {nama}")
+
+    import instagram_actions as ia
+    original_logger = ia.logger
+    ia.logger = logger_local
+    try:
+        jalankan_session(d, nama, mode, tasks, menit, like,
+                         comment, repost, prom, max_likes)
+    except Exception:
+        logger_local.exception(f"Error di {nama}")
+    finally:
+        ia.logger = original_logger
+        logger_local.info("Sesi selesai.")
+
+
+def run_single_device(device_info, mode, tasks, menit, like, comment, repost, prom, max_likes):
+    """
+    Thread worker lengkap: resolve IP + koneksi + session.
+    Dipakai oleh _run_boost_mode dan fallback.
+    """
+    nama = device_info.get("name", device_info.get("ip", "?"))
+    logger_local = _setup_logger(nama)
+    logger_local.info(f"Mulai sesi untuk {nama}")
+
+    # Resolve IP via serial (update device_info in-place)
+    ip = _resolve_ip(device_info, logger_local)
+    if not ip:
+        logger_local.error("Tidak ada IP valid, lewati.")
+        return
 
     if not check_adb_connection(ip):
         logger_local.warning("ADB tidak terhubung, mencoba connect...")
         connect_device(ip)
         time.sleep(3)
         if not check_adb_connection(ip):
-            # restart_adb_server DIHAPUS
-            logger_local.error("Gagal koneksi, lewati.")
+            logger_local.error("Gagal koneksi ADB, lewati.")
             return
 
     try:
@@ -384,7 +429,103 @@ def run_single_device(device_info, mode, tasks, menit, like, comment, repost, pr
         logger_local.exception(f"Error di {nama}")
     finally:
         logger_local.info("Sesi selesai.")
-        
+
+
+# ─────────────────────────────────────────────────────────────────
+# RUNNER
+# ─────────────────────────────────────────────────────────────────
+
+def _run_normal_groups(groups: list):
+    """
+    Preconnect semua perangkat dulu, lalu jalankan paralel.
+    Koneksi dilakukan sekali, tidak diulang di tiap thread.
+    """
+    # Kumpulkan perangkat unik
+    all_devs = []
+    seen = set()
+    for g in groups:
+        for dev in g['devices']:
+            key = dev.get('serial') or dev.get('ip', '')
+            if key and key not in seen:
+                all_devs.append(dev)
+                seen.add(key)
+
+    print(f"\n[PRE-CONNECT] Menghubungkan {len(all_devs)} perangkat...")
+    ready = _preconnect_all(all_devs)
+    if not ready:
+        print("[PRE-CONNECT] Tidak ada perangkat yang siap.")
+        return
+    print(f"[PRE-CONNECT] {len(ready)} perangkat siap.\n")
+
+    # Map serial/ip → d agar bisa dipetakan ke grup
+    key_to_d = {}
+    for (d, nama, ip, dev) in ready:
+        # Gunakan serial sebagai key utama, fallback ke ip
+        k = dev.get('serial') or ip
+        key_to_d[k] = (d, dev)
+
+    all_futures = []
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=len(ready)
+    ) as executor:
+        for group in groups:
+            for dev in group['devices']:
+                k = dev.get('serial') or dev.get('ip', '')
+                if k not in key_to_d:
+                    continue
+                d, resolved_dev = key_to_d[k]
+                future = executor.submit(
+                    run_single_device_with_d,
+                    d,
+                    resolved_dev,
+                    group['mode'],
+                    group['tasks'],
+                    group['menit'],
+                    group['like_prob'],
+                    group['comment_prob'],
+                    group['repost_prob'],
+                    group['promosi_ratio'],
+                    group['max_likes'],
+                )
+                all_futures.append(future)
+
+        for future in concurrent.futures.as_completed(all_futures):
+            try:
+                future.result()
+            except Exception as exc:
+                logging.error(f"Thread error: {exc}")
+
+
+def _run_boost_mode(devices: list):
+    """Preconnect + jalankan boost session."""
+    from boost_comment import setup_boost_session, run_boost_session
+
+    # Setup logger per device
+    for dev in devices:
+        nama = dev.get("name", dev.get("ip", "?"))
+        _setup_logger(nama)
+
+    # Input konfigurasi boost
+    cfg = setup_boost_session()
+    if not cfg:
+        return
+
+    # Preconnect semua device
+    print(f"\n[BOOST] Menghubungkan {len(devices)} perangkat...")
+    ready = _preconnect_all(devices)
+    if not ready:
+        print("[BOOST] Tidak ada perangkat yang terkoneksi.")
+        return
+    print(f"[BOOST] {len(ready)} perangkat siap.\n")
+
+    # Format yang dibutuhkan run_boost_session: list of (d, name)
+    connected = [(d, nama) for (d, nama, ip, dev) in ready]
+    run_boost_session(connected, cfg)
+
+
+# ─────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
     config = load_config()
@@ -407,7 +548,6 @@ def main() -> None:
 
         if normal_groups:
             _run_normal_groups(normal_groups)
-
         if boost_groups:
             boost_devices = []
             for g in boost_groups:
@@ -449,93 +589,6 @@ def main() -> None:
         _run_normal_groups(groups)
 
     print("\nSemua perangkat selesai.")
-
-
-def _run_normal_groups(groups: list):
-    """Jalankan semua grup task normal (1-4) secara paralel dengan pra-koneksi."""
-    # Kumpulkan SEMUA perangkat unik dari semua grup
-    all_devs = []
-    seen = set()
-    for g in groups:
-        for d in g['devices']:
-            if d['ip'] not in seen:
-                all_devs.append(d)
-                seen.add(d['ip'])
-
-    # Preconnect
-    print(f"\n[PRE-CONNECT] Menghubungkan {len(all_devs)} perangkat...")
-    ready = _preconnect_all(all_devs)
-    if not ready:
-        print("[PRE-CONNECT] Tidak ada perangkat yang siap.")
-        return
-
-    # Petakan (ip → d)
-    ip_to_d = {r[2]: r[0] for r in ready}
-    print(f"[PRE-CONNECT] {len(ready)} perangkat siap.\n")
-
-    all_futures = []
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=sum(len(g['devices']) for g in groups)
-    ) as executor:
-        for group in groups:
-            for dev in group['devices']:
-                d = ip_to_d.get(dev['ip'])
-                if d is None:
-                    continue
-                future = executor.submit(
-                    run_single_device,
-                    dev,
-                    group['mode'],
-                    group['tasks'],
-                    group['menit'],
-                    group['like_prob'],
-                    group['comment_prob'],
-                    group['repost_prob'],
-                    group['promosi_ratio'],
-                    group['max_likes'],
-                )
-                all_futures.append(future)
-
-        for future in concurrent.futures.as_completed(all_futures):
-            try:
-                future.result()
-            except Exception as exc:
-                logging.error(f"Thread error: {exc}")
-
-
-def _run_boost_mode(devices: list):
-    """Setup logger per device lalu jalankan boost session."""
-    from boost_comment import setup_boost_session, run_boost_session
-    import instagram_actions as ia
-
-    # Setup logger per device sebelum koneksi
-    for device_info in devices:
-        nama = device_info.get("name", device_info["ip"])
-        logger_local = logging.getLogger(nama)
-        logger_local.setLevel(logging.INFO)
-        formatter = logging.Formatter(f"%(asctime)s [%(levelname)s] [{nama}] %(message)s")
-        fh = logging.FileHandler(f"logs/session_{nama}.log")
-        fh.setFormatter(formatter)
-        sh = logging.StreamHandler()
-        sh.setFormatter(formatter)
-        logger_local.handlers.clear()
-        logger_local.addHandler(fh)
-        logger_local.addHandler(sh)
-
-    # Konfigurasi boost dari user
-    cfg = setup_boost_session()
-    if not cfg:
-        return
-
-    # Koneksi semua device (versi bersih)
-    print(f"\n[BOOST] Menghubungkan {len(devices)} perangkat...")
-    connected = _connect_all_devices(devices)
-    if not connected:
-        print("[BOOST] Tidak ada perangkat yang terkoneksi.")
-        return
-
-    # Override logger instagram_actions per device dihandle di dalam DeviceWorker
-    run_boost_session(connected, cfg)
 
 
 if __name__ == "__main__":
